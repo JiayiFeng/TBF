@@ -27,9 +27,10 @@ def test_tbf_dataloader_server_client_e2e(tmp_path: Path) -> None:
     global_batch_size = 8
     micro_batch_size = 2
 
-    def dataloader_for_batch_id(batch_id: int) -> DataLoader:
-        start = (batch_id * global_batch_size) % len(dataset)
-        indices = [(start + i) % len(dataset) for i in range(global_batch_size)]
+    def dataloader_start_at_batch_id(batch_id: int) -> DataLoader:
+        start_index = (batch_id * global_batch_size) % len(dataset)
+        # Create indices for all samples from start_index onwards (wrapping around)
+        indices = [(start_index + i) % len(dataset) for i in range(len(dataset))]
         subset = Subset(dataset, indices)
         return DataLoader(subset, batch_size=global_batch_size, shuffle=False, num_workers=0)
 
@@ -49,8 +50,7 @@ def test_tbf_dataloader_server_client_e2e(tmp_path: Path) -> None:
         return records
 
     server = TBFBatchHTTPServer(
-        dataset=dataset,
-        dataloader_for_batch_id=dataloader_for_batch_id,
+        dataloader_start_at_batch_id=dataloader_start_at_batch_id,
         to_records=to_records,
         prefetch_count=2,
         local_rank_count=2,

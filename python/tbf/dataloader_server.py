@@ -26,8 +26,7 @@ class _ServerState:
 class TBFBatchHTTPServer:
     def __init__(
         self,
-        dataset: Any,
-        dataloader_for_batch_id: Callable[[int], Any],
+        dataloader_start_at_batch_id: Callable[[int], Any],
         to_records: Callable[[Any], list[dict[str, Any]]],
         prefetch_count: int,
         local_rank_count: int,
@@ -39,8 +38,7 @@ class TBFBatchHTTPServer:
         if local_rank_count <= 0:
             raise ValueError("local_rank_count must be > 0")
 
-        self.dataset = dataset
-        self.dataloader_for_batch_id = dataloader_for_batch_id
+        self.dataloader_start_at_batch_id = dataloader_start_at_batch_id
         self.to_records = to_records
         self.prefetch_count = prefetch_count
         self.local_rank_count = local_rank_count
@@ -59,6 +57,10 @@ class TBFBatchHTTPServer:
             fetched_current_by_rank=[False for _ in range(local_rank_count)],
             current_batch_by_rank=[-1 for _ in range(local_rank_count)],
         )
+
+        self._dataloader = self.dataloader_start_at_batch_id(0)
+        self._dataloader_iter = iter(self._dataloader)
+        self._next_batch_id = 0
 
         self._httpd: ThreadingHTTPServer | None = None
         self._http_thread: threading.Thread | None = None
@@ -154,6 +156,12 @@ class TBFBatchHTTPServer:
             self._state.current_batch_by_rank = [batch_id - 1 for _ in range(self.local_rank_count)]
             for rank in range(self.local_rank_count):
                 self._clear_rank_files(rank)
+            
+            # Create new dataloader starting at the seek position
+            self._dataloader = self.dataloader_start_at_batch_id(batch_id)
+            self._dataloader_iter = iter(self._dataloader)
+            self._next_batch_id = batch_id
+            
             self._prefetch_window_locked()
 
     def current_batch_id(self, local_rank: int) -> int:
@@ -203,12 +211,19 @@ class TBFBatchHTTPServer:
         if shared.exists():
             return shared
 
-        loader = self.dataloader_for_batch_id(batch_id)
-        iterator = iter(loader)
+        # Ensure we're reading batches sequentially
+        if batch_id != self._next_batch_id:
+            raise RuntimeError(
+                f"batch_id mismatch: expected {self._next_batch_id}, got {batch_id}. "
+                "Batches must be materialized sequentially."
+            )
+
         try:
-            global_batch = next(iterator)
+            global_batch = next(self._dataloader_iter)
         except StopIteration as exc:
             raise ValueError(f"no data for batch_id={batch_id}") from exc
+        
+        self._next_batch_id += 1
 
         records = self.to_records(global_batch)
         if not isinstance(records, list):
