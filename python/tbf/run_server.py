@@ -13,32 +13,29 @@ from tbf.dataloader_server import TBFBatchHTTPServer
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Start TBFBatchHTTPServer")
-    parser.add_argument("--host", default="127.0.0.1", help="Server host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
-    parser.add_argument("--prefetch-count", type=int, default=2, help="Number of batches to prefetch (default: 2)")
-    parser.add_argument("--local-rank-count", type=int, default=1, help="Number of local ranks (default: 1)")
-    parser.add_argument("--local-dir", required=True, help="Local directory for storing batch files")
-    parser.add_argument("--page-size", type=int, default=4096, help="TBF page size (default: 4096)")
-    
-    args = parser.parse_args()
+    prefetch_count = 2
+    local_rank_count = 8
+    local_dir = "./tbf_local"
+    page_size = 4096
+    host = "127.0.0.1"
+    port = 8999
     
     # Create server
     server = TBFBatchHTTPServer(
         dataloader_start_at_batch_id=dataloader_start_at_batch_id,
         to_records=to_records,
-        prefetch_count=args.prefetch_count,
-        local_rank_count=args.local_rank_count,
-        local_dir=args.local_dir,
-        page_size=args.page_size,
+        prefetch_count=prefetch_count,
+        local_rank_count=local_rank_count,
+        local_dir=local_dir,
+        page_size=page_size,
     )
     
     # Start server
-    server.start(host=args.host, port=args.port)
+    server.start(host=host, port=port)
     print(f"Server started at {server.base_url}")
-    print(f"Local directory: {args.local_dir}")
-    print(f"Prefetch count: {args.prefetch_count}")
-    print(f"Local rank count: {args.local_rank_count}")
+    print(f"Local directory: {local_dir}")
+    print(f"Prefetch count: {prefetch_count}")
+    print(f"Local rank count: {local_rank_count}")
     print("\nPress Ctrl+C to stop...")
     
     try:
