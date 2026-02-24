@@ -3,6 +3,7 @@ from mmq.utils.byte_tensor import tensor_to_object
 from mmq.utils.arguments import get_args
 from mmq.data.causal_lm_data_loader import get_train_data_loader
 from mmq.data.causal_lm_data import CausalMicroBatchSplitterByHint, CausalCollatorV2
+from mmq.data.var_len_batch import VarLenBatch
 import torch
 import dataclasses
 
@@ -22,11 +23,12 @@ collator = CausalCollatorV2(
     varlen_batch_concat=data_args.varlen_batch_concat,
 )
 
-def batch_data_to_dict(batch) -> dict[str, torch.Tensor]:
+def batch_data_to_dict(batch) -> list[dict[str, torch.Tensor]]:
     res = []
     for micro_batch in batch:
         dd = {}
         for key, value in micro_batch.items():
+            value: VarLenBatch
             sub_dict = dataclasses.asdict(value)
             if "max_size" in sub_dict and sub_dict["max_size"] is not None:
                 sub_dict["max_size"] = torch.tensor(sub_dict["max_size"])
@@ -38,6 +40,7 @@ def batch_data_to_dict(batch) -> dict[str, torch.Tensor]:
             dd.update(sub_dict)
         res.append(dd)
     return res
+
 
 
 def to_records(global_batch: object) -> list[dict[str, torch.Tensor]]:
