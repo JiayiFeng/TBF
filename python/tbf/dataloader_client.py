@@ -94,7 +94,7 @@ class AsyncTBFBatchClient:
             data=b"" if method == "POST" else None,
         )
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            with urllib.request.urlopen(req) as resp:  # noqa: S310
                 body = resp.read()
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")

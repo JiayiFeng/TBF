@@ -119,12 +119,16 @@ class TBFBatchHTTPServer:
                     q = self._query()
                     if self.path == "/seek":
                         batch_id = int(q["batch_id"])
+                        print(f"Received seek request for batch_id={batch_id}")
                         owner.seek(batch_id)
+                        print(f"Completed seek request for batch_id={batch_id}")
                         self._write_json(200, {"batch_id": batch_id})
                         return
                     if self.path == "/fetch_next":
                         local_rank = int(q["local_rank"])
+                        print(f"Received fetch_next request for local_rank={local_rank}")
                         filename = owner.fetch_next(local_rank)
+                        print(f"Returning fetch_next response for local_rank={local_rank}, filename={filename}")
                         self._write_json(200, {"filename": filename})
                         return
                     self._write_json(404, {"error": "not found"})
