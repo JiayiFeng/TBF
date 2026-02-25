@@ -10,7 +10,7 @@ import os
 import sys
 import time
 from tbf.dataloader_server import TBFBatchHTTPServer
-from mmq.data.sft_dataloader import tbf_dataloader_start_at_batch_id, tbf_to_records
+from mmq.data.sft_tbf_dataloader import tbf_dataloader_start_at_batch_id, tbf_to_records
 
 
 def main():
