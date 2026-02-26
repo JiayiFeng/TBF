@@ -64,13 +64,6 @@ def _create_arg_parser() -> argparse.ArgumentParser:
         default=1,
     )
     parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="not using anymore, always use cuda",
-    )
-    parser.add_argument(
         "--image_filename_transform",
         type=str,
         default=None,
