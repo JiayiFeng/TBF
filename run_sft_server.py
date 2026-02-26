@@ -88,6 +88,25 @@ def _create_arg_parser() -> argparse.ArgumentParser:
         help="extra args for dataset, mainly use in eval set",
     )
 
+    parser.add_argument(
+        "--tp_size",
+        type=int,
+        default=1,
+        help="tensor parallel size",
+    )
+    parser.add_argument(
+        "--ap_size",
+        type=int,
+        default=1,
+        help="attention parallel size",
+    )
+    parser.add_argument(
+        "--ring_attn_size",
+        type=int,
+        default=1,
+        help="ring attention parallel size",
+    )
+
     return parser
 
 
