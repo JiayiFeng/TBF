@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +46,9 @@ class TBFBatchHTTPServer:
         self.page_size = page_size
 
         self.local_dir = Path(local_dir)
+        if self.local_dir.exists():
+            shutil.rmtree(self.local_dir)
+        self.local_dir.mkdir(parents=True)
         self.shared_dir = self.local_dir / "shared"
         self.rank_dirs = [self.local_dir / f"rank_{r}" for r in range(local_rank_count)]
         self.shared_dir.mkdir(parents=True, exist_ok=True)
