@@ -119,6 +119,33 @@ def _create_arg_parser() -> jsonargparse.ArgumentParser:
         help="rank to ring attention parallel mapping",
     )
 
+    parser.add_argument(
+        "--gpt.num_mtp",
+        type=int,
+        default=0,
+        help="number of multi-token predictions for GPT",
+    )
+    parser.add_argument("--gpt.oe_grams", type=list[int], default=[])
+    parser.add_argument("--gpt.vocab_size", type=int, required=True)
+    parser.add_argument("--gpt.oe_use_simple_hash", type=bool, default=False)
+
+    parser.add_argument(
+        "--distributed.ring_impl",
+        type=str,
+        choices=["ring_flash", "zigzag_flex", "allgather_flash"],
+        default="ring_flash",
+    )
+
+    parser.add_argument(
+        "--debug.average_loss_level",
+        type=str,
+        default="token",
+        choices=["token", "sequence"],
+        help="the level to average loss, default is token",
+    )
+
+
+
     return parser
 
 
