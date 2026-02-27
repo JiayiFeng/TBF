@@ -23,7 +23,9 @@ def main():
     # Create server
     server = TBFBatchHTTPServer(
         dataloader_start_at_batch_id=dataloader_start_at_batch_id,
-        to_records=to_records,
+        to_records_funcs=[[to_records]],
+        rank_ap_mapping=[0] * local_rank_count,
+        rank_ring_attn_mapping=[0] * local_rank_count,
         prefetch_count=prefetch_count,
         local_rank_count=local_rank_count,
         local_dir=local_dir,

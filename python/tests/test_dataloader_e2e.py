@@ -51,7 +51,9 @@ def test_tbf_dataloader_server_client_e2e(tmp_path: Path) -> None:
 
     server = TBFBatchHTTPServer(
         dataloader_start_at_batch_id=dataloader_start_at_batch_id,
-        to_records=to_records,
+        to_records_funcs=[[to_records]],
+        rank_ap_mapping=[0, 0],
+        rank_ring_attn_mapping=[0, 0],
         prefetch_count=2,
         local_rank_count=2,
         local_dir=tmp_path,

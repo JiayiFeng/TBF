@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -28,7 +29,9 @@ class TBFBatchHTTPServer:
     def __init__(
         self,
         dataloader_start_at_batch_id: Callable[[int], Any],
-        to_records: Callable[[Any], list[dict[str, Any]]],
+        to_records_funcs: list[list[Callable[[Any], list[dict[str, Any]]]]],
+        rank_ap_mapping: list[int],
+        rank_ring_attn_mapping: list[int],
         prefetch_count: int,
         local_rank_count: int,
         local_dir: str | Path,
@@ -40,7 +43,9 @@ class TBFBatchHTTPServer:
             raise ValueError("local_rank_count must be > 0")
 
         self.dataloader_start_at_batch_id = dataloader_start_at_batch_id
-        self.to_records = to_records
+        self.to_records_funcs = to_records_funcs
+        self.rank_ap_mapping = rank_ap_mapping
+        self.rank_ring_attn_mapping = rank_ring_attn_mapping
         self.prefetch_count = prefetch_count
         self.local_rank_count = local_rank_count
         self.page_size = page_size
@@ -208,16 +213,16 @@ class TBFBatchHTTPServer:
         for p in rank_dir.glob("*.tbf"):
             p.unlink(missing_ok=True)
 
-    def _shared_file(self, batch_id: int) -> Path:
-        return self.shared_dir / f"batch_{batch_id}.tbf"
+    def _shared_file(self, batch_id: int, ap_rank: int, ring_attn_rank: int) -> Path:
+        return self.shared_dir / f"batch_{batch_id}_ap{ap_rank}_ring{ring_attn_rank}.tbf"
 
     def _rank_file(self, local_rank: int, batch_id: int) -> Path:
         return self.rank_dirs[local_rank] / f"batch_{batch_id}.tbf"
 
-    def _materialize_shared_locked(self, batch_id: int) -> Path:
-        shared = self._shared_file(batch_id)
-        if shared.exists():
-            return shared
+    def _materialize_shared_locked(self, batch_id: int) -> None:
+        # Check if already materialized
+        if self._shared_file(batch_id, 0, 0).exists():
+            return
 
         # Ensure we're reading batches sequentially
         if batch_id != self._next_batch_id:
@@ -230,23 +235,29 @@ class TBFBatchHTTPServer:
             global_batch = next(self._dataloader_iter)
         except StopIteration as exc:
             raise ValueError(f"no data for batch_id={batch_id}") from exc
-        
+
         self._next_batch_id += 1
 
-        records = self.to_records(global_batch)
-        if not isinstance(records, list):
-            raise TypeError("to_records must return list[dict[str, Tensor]]")
-
-        tmp_path = shared.with_suffix(".tmp")
-        write_tbf(tmp_path, records, page_size=self.page_size)
-        os.replace(tmp_path, shared)
-        return shared
+        for ap_rank, funcs_row in enumerate(self.to_records_funcs):
+            for ring_attn_rank, to_records_func in enumerate(funcs_row):
+                shared = self._shared_file(batch_id, ap_rank, ring_attn_rank)
+                # TODO: refine the copy
+                batch_copy = copy.deepcopy(global_batch)
+                records = to_records_func(batch_copy)
+                if not isinstance(records, list):
+                    raise TypeError("to_records must return list[dict[str, Tensor]]")
+                tmp_path = shared.with_suffix(".tmp")
+                write_tbf(tmp_path, records, page_size=self.page_size)
+                os.replace(tmp_path, shared)
 
     def _ensure_rank_link_locked(self, local_rank: int, batch_id: int) -> Path:
         target = self._rank_file(local_rank, batch_id)
         if target.exists():
             return target
-        shared = self._materialize_shared_locked(batch_id)
+        self._materialize_shared_locked(batch_id)
+        ap_rank = self.rank_ap_mapping[local_rank]
+        ring_attn_rank = self.rank_ring_attn_mapping[local_rank]
+        shared = self._shared_file(batch_id, ap_rank, ring_attn_rank)
         try:
             os.link(shared, target)
         except FileExistsError:

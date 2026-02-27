@@ -5,17 +5,17 @@
 tbf_to_records 函数来启动 TBF HTTP 服务器。
 """
 
-import argparse
+import jsonargparse
 import os
 import sys
 import time
 from tbf.dataloader_server import TBFBatchHTTPServer
-from mmq.data.sft_tbf_dataloader import tbf_dataloader_start_at_batch_id, tbf_to_records
+from mmq.data.sft_tbf_dataloader import tbf_dataloader_start_at_batch_id, to_records_func_creator
 from functools import partial
 from typing import Any
 
-def _create_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="启动 TBF SFT 数据加载服务器")
+def _create_arg_parser() -> jsonargparse.ArgumentParser:
+    parser = jsonargparse.ArgumentParser(description="启动 TBF SFT 数据加载服务器")
     parser.add_argument("--host", default="127.0.0.1", help="服务器监听地址 (默认: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8999, help="服务器监听端口 (默认: 8999)")
     parser.add_argument("--prefetch-count", type=int, default=2, help="预取批次数量 (默认: 2)")
@@ -106,6 +106,18 @@ def _create_arg_parser() -> argparse.ArgumentParser:
         default=1,
         help="ring attention parallel size",
     )
+    parser.add_argument(
+        "--rank_ap_mapping",
+        type=list[int],
+        default=None,
+        help="rank to attention parallel mapping",
+    )
+    parser.add_argument(
+        "--rank_ring_attn_mapping",
+        type=list[int],
+        default=None,
+        help="rank to ring attention parallel mapping",
+    )
 
     return parser
 
@@ -125,11 +137,30 @@ def main():
     print(f"  Data Directory:    {args.data_dir}")
     print(f"  Page Size:         {args.page_size} bytes")
     print("=" * 70)
-    
+
+    to_records_funcs = []
+    for ap_rank in range(args.ap_size):
+        funcs = []
+        for ring_attn_rank in range(args.ring_attn_size):
+            funcs.append(to_records_func_creator(args=args, ap_rank=ap_rank, ap_size=args.ap_size, ring_attn_rank=ring_attn_rank, ring_attn_size=args.ring_attn_size))
+        to_records_funcs.append(funcs)
+
+    if args.rank_ap_mapping is None:
+        if args.ap_size > 1:
+            raise ValueError("ap_size > 1 but rank_ap_mapping is not provided")
+        args.rank_ap_mapping = [0] * args.local_rank_count
+
+    if args.rank_ring_attn_mapping is None:
+        if args.ring_attn_size > 1:
+            raise ValueError("ring_attn_size > 1 but rank_ring_attn_mapping is not provided")
+        args.rank_ring_attn_mapping = [0] * args.local_rank_count
+
     # 创建服务器
     server = TBFBatchHTTPServer(
         dataloader_start_at_batch_id=partial(tbf_dataloader_start_at_batch_id, dataset_args=args),
-        to_records=tbf_to_records,
+        to_records_funcs=to_records_funcs,
+        rank_ap_mapping=args.rank_ap_mapping,
+        rank_ring_attn_mapping=args.rank_ring_attn_mapping,
         prefetch_count=args.prefetch_count,
         local_rank_count=args.local_rank_count,
         local_dir=args.data_dir,
