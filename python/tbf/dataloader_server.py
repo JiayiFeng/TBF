@@ -241,9 +241,7 @@ class TBFBatchHTTPServer:
         for ap_rank, funcs_row in enumerate(self.to_records_funcs):
             for ring_attn_rank, to_records_func in enumerate(funcs_row):
                 shared = self._shared_file(batch_id, ap_rank, ring_attn_rank)
-                # TODO: refine the copy
-                batch_copy = copy.deepcopy(global_batch)
-                records = to_records_func(batch_copy)
+                records = to_records_func(global_batch)
                 if not isinstance(records, list):
                     raise TypeError("to_records must return list[dict[str, Tensor]]")
                 tmp_path = shared.with_suffix(".tmp")
