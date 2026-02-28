@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from tbf.dataloader_client import AsyncTBFBatchClient
-from tbf.dataloader_server import TBFBatchHTTPServer
+from tbf.dataloader_server import Link, Own, TBFBatchHTTPServer
 
 
 class MNISTLikeDataset(Dataset):
@@ -33,20 +33,20 @@ def test_tbf_dataloader_server_client_e2e(tmp_path: Path) -> None:
         subset = Subset(dataset, indices)
         return DataLoader(subset, batch_size=global_batch_size, shuffle=False, num_workers=0)
 
-    def to_records(global_batch: object) -> list[dict[str, torch.Tensor]]:
+    def to_records(global_batch: object) -> list[Own | Link]:
         assert isinstance(global_batch, (tuple, list))
         images, labels = global_batch
         assert isinstance(images, torch.Tensor)
         assert isinstance(labels, torch.Tensor)
 
-        records: list[dict[str, torch.Tensor]] = []
+        records_rank0: list[dict[str, torch.Tensor]] = []
         for start in range(0, int(images.shape[0]), micro_batch_size):
             end = start + micro_batch_size
-            records.append({
+            records_rank0.append({
                 "image": images[start:end].clone(),
                 "label": labels[start:end].clone(),
             })
-        return records
+        return [Own(records_rank0), Link(src_rank=0)]
 
     server = TBFBatchHTTPServer(
         dataset=dataset,
@@ -83,17 +83,21 @@ def test_tbf_dataloader_server_client_e2e(tmp_path: Path) -> None:
             assert tuple(micro["image"].shape) == (micro_batch_size, 1, 28, 28)
             assert tuple(micro["label"].shape) == (micro_batch_size,)
 
-        # Client rank0 deletes file after opening.
+        batch0_rank1_path = client1.fetch_next_filename()
+        batch0_rank1 = client1._load_records(batch0_rank1_path)
+        assert len(batch0_rank1) == len(batch0)
+        for micro0, micro1 in zip(batch0, batch0_rank1):
+            assert torch.equal(micro0["image"], micro1["image"])
+            assert torch.equal(micro0["label"], micro1["label"])
+
+        # Both files are consumed and unlinked after opening.
         assert not rank0_batch0.exists()
-        # rank1 has not fetched yet, so its file still exists.
-        assert rank1_batch0.exists()
+        assert not rank1_batch0.exists()
 
         assert client0.current_batch_id() == 0
-        assert client1.current_batch_id() == -1
-
-        # Barrier: once rank1 fetches batch0, window can advance and rank0 gets batch1.
-        client1.fetch_next_filename()
         assert client1.current_batch_id() == 0
+
+        # Barrier passed after both ranks fetched batch0; rank0 can move to batch1.
 
         batch1 = next(it)
         assert len(batch1) == global_batch_size // micro_batch_size
