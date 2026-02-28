@@ -220,8 +220,12 @@ class TBFBatchHTTPServer:
         return self.rank_dirs[local_rank] / f"batch_{batch_id}.tbf"
 
     def _materialize_shared_locked(self, batch_id: int) -> None:
-        # Check if already materialized
-        if self._shared_file(batch_id, 0, 0).exists():
+        # Check if already fully materialized (all ap/ring_attn combinations)
+        if all(
+            self._shared_file(batch_id, ap_rank, ring_attn_rank).exists()
+            for ap_rank, funcs_row in enumerate(self.to_records_funcs)
+            for ring_attn_rank in range(len(funcs_row))
+        ):
             return
 
         # Ensure we're reading batches sequentially
