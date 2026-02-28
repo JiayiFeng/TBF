@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TypeAlias
 
 from .format import DEFAULT_PAGE_SIZE
 from .writer import write_tbf
@@ -14,6 +14,24 @@ from .writer import write_tbf
 
 class _NotReadyError(RuntimeError):
     pass
+
+
+Record: TypeAlias = dict[str, Any]
+Records: TypeAlias = list[Record]
+
+
+@dataclass(frozen=True)
+class Own:
+    records: Records
+
+
+@dataclass(frozen=True)
+class Link:
+    src_rank: int
+
+
+RankOutput: TypeAlias = Own | Link
+ToRecordsResult: TypeAlias = list[RankOutput]
 
 
 @dataclass
@@ -28,7 +46,7 @@ class TBFBatchHTTPServer:
         self,
         dataset: Any,
         dataloader_for_batch_id: Callable[[int], Any],
-        to_records: Callable[[Any], list[dict[str, Any]]],
+        to_records: Callable[[Any], ToRecordsResult],
         prefetch_count: int,
         local_rank_count: int,
         local_dir: str | Path,
@@ -47,9 +65,7 @@ class TBFBatchHTTPServer:
         self.page_size = page_size
 
         self.local_dir = Path(local_dir)
-        self.shared_dir = self.local_dir / "shared"
         self.rank_dirs = [self.local_dir / f"rank_{r}" for r in range(local_rank_count)]
-        self.shared_dir.mkdir(parents=True, exist_ok=True)
         for rank_dir in self.rank_dirs:
             rank_dir.mkdir(parents=True, exist_ok=True)
 
@@ -192,17 +208,10 @@ class TBFBatchHTTPServer:
         for p in rank_dir.glob("*.tbf"):
             p.unlink(missing_ok=True)
 
-    def _shared_file(self, batch_id: int) -> Path:
-        return self.shared_dir / f"batch_{batch_id}.tbf"
-
     def _rank_file(self, local_rank: int, batch_id: int) -> Path:
         return self.rank_dirs[local_rank] / f"batch_{batch_id}.tbf"
 
-    def _materialize_shared_locked(self, batch_id: int) -> Path:
-        shared = self._shared_file(batch_id)
-        if shared.exists():
-            return shared
-
+    def _to_records_result(self, batch_id: int) -> ToRecordsResult:
         loader = self.dataloader_for_batch_id(batch_id)
         iterator = iter(loader)
         try:
@@ -210,31 +219,68 @@ class TBFBatchHTTPServer:
         except StopIteration as exc:
             raise ValueError(f"no data for batch_id={batch_id}") from exc
 
-        records = self.to_records(global_batch)
-        if not isinstance(records, list):
-            raise TypeError("to_records must return list[dict[str, Tensor]]")
+        outputs = self.to_records(global_batch)
+        if not isinstance(outputs, list):
+            raise TypeError("to_records must return list[Own | Link]")
+        if len(outputs) != self.local_rank_count:
+            raise ValueError(
+                f"to_records returned {len(outputs)} rank outputs, expected {self.local_rank_count}"
+            )
+        has_owner = False
+        for rank, output in enumerate(outputs):
+            if isinstance(output, Own):
+                has_owner = True
+                continue
+            if not isinstance(output, Link):
+                raise TypeError(f"invalid rank output for rank={rank}: {type(output)!r}")
+            src_rank = output.src_rank
+            if src_rank < 0 or src_rank >= self.local_rank_count:
+                raise ValueError(f"invalid src_rank={src_rank} for rank={rank}")
+            if src_rank == rank:
+                raise ValueError(f"rank={rank} cannot link to itself")
+            src_output = outputs[src_rank]
+            if not isinstance(src_output, Own):
+                raise ValueError(f"rank={rank} links to rank={src_rank}, which is not Own")
 
-        tmp_path = shared.with_suffix(".tmp")
-        write_tbf(tmp_path, records, page_size=self.page_size)
-        os.replace(tmp_path, shared)
-        return shared
+        if not has_owner:
+            raise ValueError("to_records result must include at least one Own output")
+        return outputs
 
-    def _ensure_rank_link_locked(self, local_rank: int, batch_id: int) -> Path:
-        target = self._rank_file(local_rank, batch_id)
-        if target.exists():
-            return target
-        shared = self._materialize_shared_locked(batch_id)
-        try:
-            os.link(shared, target)
-        except FileExistsError:
-            pass
-        return target
+    def _materialize_batch_locked(self, batch_id: int, skip_ranks: set[int] | None = None) -> None:
+        skip = skip_ranks or set()
+        outputs = self._to_records_result(batch_id)
+        for rank, output in enumerate(outputs):
+            if rank in skip:
+                continue
+            if not isinstance(output, Own):
+                continue
+            target = self._rank_file(rank, batch_id)
+            if target.exists():
+                continue
+            tmp_path = target.with_suffix(".tmp")
+            write_tbf(tmp_path, output.records, page_size=self.page_size)
+            os.replace(tmp_path, target)
+
+        for rank, output in enumerate(outputs):
+            if rank in skip:
+                continue
+            if not isinstance(output, Link):
+                continue
+            target = self._rank_file(rank, batch_id)
+            if target.exists():
+                continue
+            source = self._rank_file(output.src_rank, batch_id)
+            try:
+                os.link(source, target)
+            except FileExistsError:
+                pass
 
     def _prefetch_window_locked(self) -> None:
         start = self._state.window_start_batch_id
         end = start + self.prefetch_count
         for batch_id in range(start, end):
-            for rank in range(self.local_rank_count):
-                if batch_id == start and self._state.fetched_current_by_rank[rank]:
-                    continue
-                self._ensure_rank_link_locked(rank, batch_id)
+            if batch_id == start:
+                skipped = {rank for rank, fetched in enumerate(self._state.fetched_current_by_rank) if fetched}
+                self._materialize_batch_locked(batch_id, skip_ranks=skipped)
+                continue
+            self._materialize_batch_locked(batch_id)
