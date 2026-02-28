@@ -64,11 +64,14 @@ class AsyncTBFBatchClient:
             yield batch
 
     def _worker(self) -> None:
+        pending_batch: list[dict[str, Any]] | None = None
         while not self._stop_event.is_set():
             try:
-                filename = self.fetch_next_filename()
-                batch = self._load_records(filename)
-                self._queue.put(batch, timeout=self.poll_interval_sec)
+                if pending_batch is None:
+                    filename = self.fetch_next_filename()
+                    pending_batch = self._load_records(filename)
+                self._queue.put(pending_batch, timeout=self.poll_interval_sec)
+                pending_batch = None
             except queue.Full:
                 continue
             except RuntimeError:

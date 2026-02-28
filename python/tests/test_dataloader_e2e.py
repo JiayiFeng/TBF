@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import torch
@@ -105,4 +106,66 @@ def test_tbf_dataloader_server_client_e2e(tmp_path: Path) -> None:
     finally:
         client0.stop()
         client1.stop()
+        server.stop()
+
+
+def test_tbf_dataloader_client_queue_full_does_not_drop_batches(tmp_path: Path) -> None:
+    dataset = MNISTLikeDataset(size=128)
+    global_batch_size = 4
+    micro_batch_size = 2
+
+    def dataloader_for_batch_id(batch_id: int) -> DataLoader:
+        start = (batch_id * global_batch_size) % len(dataset)
+        indices = [(start + i) % len(dataset) for i in range(global_batch_size)]
+        subset = Subset(dataset, indices)
+        return DataLoader(subset, batch_size=global_batch_size, shuffle=False, num_workers=0)
+
+    def to_records(global_batch: object) -> list[Own]:
+        assert isinstance(global_batch, (tuple, list))
+        images, labels = global_batch
+        assert isinstance(images, torch.Tensor)
+        assert isinstance(labels, torch.Tensor)
+
+        records: list[dict[str, torch.Tensor]] = []
+        for start in range(0, int(images.shape[0]), micro_batch_size):
+            end = start + micro_batch_size
+            records.append({
+                "image": images[start:end].clone(),
+                "label": labels[start:end].clone(),
+            })
+        return [Own(records)]
+
+    server = TBFBatchHTTPServer(
+        dataset=dataset,
+        dataloader_for_batch_id=dataloader_for_batch_id,
+        to_records=to_records,
+        prefetch_count=8,
+        local_rank_count=1,
+        local_dir=tmp_path,
+    )
+    server.start(host="127.0.0.1", port=0)
+
+    client = AsyncTBFBatchClient(
+        base_url=server.base_url,
+        local_rank=0,
+        queue_size=1,
+        poll_interval_sec=0.01,
+    )
+
+    try:
+        client.seek(0)
+        client.start()
+        time.sleep(0.2)
+
+        # With a full queue, worker should not keep fetching and skipping batches.
+        assert client.current_batch_id() <= 1
+
+        it = client.batches()
+        batch0 = next(it)
+        batch1 = next(it)
+
+        assert int(batch0[0]["label"][0]) == 0
+        assert int(batch1[0]["label"][0]) == global_batch_size
+    finally:
+        client.stop()
         server.stop()
