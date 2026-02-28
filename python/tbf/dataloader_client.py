@@ -18,10 +18,12 @@ class AsyncTBFBatchClient:
         local_rank: int,
         queue_size: int = 2,
         poll_interval_sec: float = 0.01,
+        http_timeout: float = 100,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.local_rank = local_rank
         self.poll_interval_sec = poll_interval_sec
+        self.http_timeout = http_timeout
 
         self._queue: queue.Queue[list] = queue.Queue(maxsize=queue_size)
         self._stop_event = threading.Event()
@@ -94,7 +96,7 @@ class AsyncTBFBatchClient:
             data=b"" if method == "POST" else None,
         )
         try:
-            with urllib.request.urlopen(req) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=self.http_timeout) as resp:  # noqa: S310
                 body = resp.read()
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")

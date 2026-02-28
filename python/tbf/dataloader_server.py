@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import shutil
 import threading
@@ -12,6 +13,8 @@ from typing import Any, Callable
 
 from .format import DEFAULT_PAGE_SIZE
 from .writer import write_tbf
+
+logger = logging.getLogger(__name__)
 
 
 class _NotReadyError(RuntimeError):
@@ -51,14 +54,13 @@ class TBFBatchHTTPServer:
         self.page_size = page_size
 
         self.local_dir = Path(local_dir)
-        if self.local_dir.exists():
-            shutil.rmtree(self.local_dir)
-        self.local_dir.mkdir(parents=True)
         self.shared_dir = self.local_dir / "shared"
         self.rank_dirs = [self.local_dir / f"rank_{r}" for r in range(local_rank_count)]
-        self.shared_dir.mkdir(parents=True, exist_ok=True)
-        for rank_dir in self.rank_dirs:
-            rank_dir.mkdir(parents=True, exist_ok=True)
+        # Only clean up the subdirectories this server manages, not the entire local_dir.
+        for managed_dir in [self.shared_dir, *self.rank_dirs]:
+            if managed_dir.exists():
+                shutil.rmtree(managed_dir)
+            managed_dir.mkdir(parents=True)
 
         self._lock = threading.RLock()
         self._state = _ServerState(
@@ -128,16 +130,16 @@ class TBFBatchHTTPServer:
                     q = self._query()
                     if self.path == "/seek":
                         batch_id = int(q["batch_id"])
-                        print(f"Received seek request for batch_id={batch_id}")
+                        logger.debug("Received seek request for batch_id=%d", batch_id)
                         owner.seek(batch_id)
-                        print(f"Completed seek request for batch_id={batch_id}")
+                        logger.debug("Completed seek request for batch_id=%d", batch_id)
                         self._write_json(200, {"batch_id": batch_id})
                         return
                     if self.path == "/fetch_next":
                         local_rank = int(q["local_rank"])
-                        print(f"Received fetch_next request for local_rank={local_rank}")
+                        logger.debug("Received fetch_next request for local_rank=%d", local_rank)
                         filename = owner.fetch_next(local_rank)
-                        print(f"Returning fetch_next response for local_rank={local_rank}, filename={filename}")
+                        logger.debug("Returning fetch_next response for local_rank=%d, filename=%s", local_rank, filename)
                         self._write_json(200, {"filename": filename})
                         return
                     self._write_json(404, {"error": "not found"})
