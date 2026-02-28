@@ -65,18 +65,12 @@ class AsyncTBFBatchClient:
 
     def _worker(self) -> None:
         while not self._stop_event.is_set():
-            if self._queue.full():
-                time.sleep(self.poll_interval_sec)
-                continue
             try:
                 filename = self.fetch_next_filename()
                 batch = self._load_records(filename)
-                while not self._stop_event.is_set():
-                    try:
-                        self._queue.put(batch, timeout=self.poll_interval_sec)
-                        break
-                    except queue.Full:
-                        continue
+                self._queue.put(batch, timeout=self.poll_interval_sec)
+            except queue.Full:
+                continue
             except RuntimeError:
                 time.sleep(self.poll_interval_sec)
 
