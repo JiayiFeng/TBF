@@ -7,6 +7,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 from .reader import TBFReader
 
@@ -23,7 +24,7 @@ class AsyncTBFBatchClient:
         self.local_rank = local_rank
         self.poll_interval_sec = poll_interval_sec
 
-        self._queue: queue.Queue[str] = queue.Queue(maxsize=queue_size)
+        self._queue: queue.Queue[list[dict[str, Any]]] = queue.Queue(maxsize=queue_size)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -57,10 +58,10 @@ class AsyncTBFBatchClient:
             if self._stop_event.is_set() and self._queue.empty():
                 return
             try:
-                filename = self._queue.get(timeout=0.1)
+                batch = self._queue.get(timeout=0.1)
             except queue.Empty:
                 continue
-            yield self._load_records(filename)
+            yield batch
 
     def _worker(self) -> None:
         while not self._stop_event.is_set():
@@ -69,7 +70,13 @@ class AsyncTBFBatchClient:
                 continue
             try:
                 filename = self.fetch_next_filename()
-                self._queue.put(filename)
+                batch = self._load_records(filename)
+                while not self._stop_event.is_set():
+                    try:
+                        self._queue.put(batch, timeout=self.poll_interval_sec)
+                        break
+                    except queue.Full:
+                        continue
             except RuntimeError:
                 time.sleep(self.poll_interval_sec)
 
