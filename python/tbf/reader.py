@@ -40,6 +40,11 @@ class TBFReader:
             raise ValueError("file too small")
 
         self._mmap = mmap.mmap(self._f.fileno(), length=0, access=mmap.ACCESS_READ)
+        try:
+            self._mmap.madvise(mmap.MADV_SEQUENTIAL)
+        except (AttributeError, OSError):
+            pass
+        self._mv = memoryview(self._mmap)
         self.record_count: int
         self.entry_count: int
         self._entries: list[TensorMeta]
@@ -49,8 +54,13 @@ class TBFReader:
             self._entries_by_record[entry.record_id].append(entry)
 
     def close(self) -> None:
-        if hasattr(self, "_mmap") and self._mmap is not None:
-            self._mmap.close()
+        # Drop references only; do not call mmap.close() so that any tensors
+        # created via __getitem__ (which hold memoryview slices into the mmap)
+        # remain valid.  The mmap is released by the GC when all such tensors
+        # are collected.
+        if hasattr(self, "_mv"):
+            self._mv = None
+        if hasattr(self, "_mmap"):
             self._mmap = None
         if hasattr(self, "_f") and self._f is not None:
             self._f.close()
@@ -79,42 +89,16 @@ class TBFReader:
             if entry.nbytes == 0:
                 tensor = torch.empty(entry.shape, dtype=dtype)
             else:
-                element_size = self._code_to_elsize[entry.dtype_code]
-                count = entry.nbytes // element_size
-                base = torch.frombuffer(self._mmap, dtype=dtype, count=count, offset=entry.data_offset)
-                # Materialize tensor data so returned tensors do not depend on reader lifetime.
-                tensor = base.view(entry.shape).clone()
+                # Zero-copy: memoryview slice is O(1); frombuffer creates a
+                # typed tensor view into the mmap with no data copy.
+                # The slice holds a reference to the mmap, keeping it alive
+                # beyond reader.close().
+                tensor = torch.frombuffer(
+                    self._mv[entry.data_offset : entry.data_offset + entry.nbytes],
+                    dtype=dtype,
+                ).view(entry.shape)
             out[entry.key] = tensor
         return out
-
-    def read_all(self) -> list[dict[str, torch.Tensor]]:
-        """Read all records in a single bulk copy.
-
-        Instead of cloning each tensor individually, the entire file is copied
-        into a bytearray once.  Tensors are then created as views into that
-        buffer (no extra per-tensor allocation/copy).  The bytearray is kept
-        alive via Python's reference counting as long as any returned tensor
-        is still referenced.
-        """
-        self._mmap.seek(0)
-        raw = bytearray(self._mmap.read())
-        result: list[dict[str, torch.Tensor]] = []
-        for record_entries in self._entries_by_record:
-            record: dict[str, torch.Tensor] = {}
-            for entry in record_entries:
-                dtype = self._code_to_dtype.get(entry.dtype_code)
-                if dtype is None:
-                    raise ValueError(f"unknown dtype_code: {entry.dtype_code}")
-                if entry.nbytes == 0:
-                    tensor = torch.empty(entry.shape, dtype=dtype)
-                else:
-                    element_size = self._code_to_elsize[entry.dtype_code]
-                    count = entry.nbytes // element_size
-                    # frombuffer holds a reference to raw; no clone needed.
-                    tensor = torch.frombuffer(raw, dtype=dtype, count=count, offset=entry.data_offset).view(entry.shape)
-                record[entry.key] = tensor
-            result.append(record)
-        return result
 
     def metadata(self) -> list[TensorMeta]:
         return list(self._entries)
