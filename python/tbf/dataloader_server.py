@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -256,8 +257,11 @@ class TBFBatchHTTPServer:
             if target.exists():
                 continue
             tmp_path = target.with_suffix(".tmp")
+            t0 = time.perf_counter()
             write_tbf(tmp_path, output.records, page_size=self.page_size)
+            write_ms = (time.perf_counter() - t0) * 1000
             os.replace(tmp_path, target)
+            print(f"  [TBF timing] write_tbf rank={rank} batch_id={batch_id}: {write_ms:.1f} ms")
 
         for rank, output in enumerate(outputs):
             if rank in skip:

@@ -78,12 +78,19 @@ class AsyncTBFBatchClient:
                 time.sleep(self.poll_interval_sec)
 
     def _load_records(self, filename: str):
+        t0 = time.perf_counter()
         with TBFReader(filename) as reader:
+            open_ms = (time.perf_counter() - t0) * 1000
             os.unlink(filename)
+            t1 = time.perf_counter()
             out = []
             for i in range(len(reader)):
                 out.append(reader[i])
-            return out
+            read_ms = (time.perf_counter() - t1) * 1000
+        total_ms = (time.perf_counter() - t0) * 1000
+        print(f"  [TBF timing] _load_records rank={self.local_rank} file={filename}: "
+              f"open={open_ms:.1f} ms, read_records={read_ms:.1f} ms, total={total_ms:.1f} ms")
+        return out
 
     def _get_json(self, path_with_query: str) -> dict[str, object]:
         return self._request_json("GET", path_with_query)
