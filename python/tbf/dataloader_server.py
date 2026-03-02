@@ -69,6 +69,7 @@ class TBFBatchHTTPServer:
         for rank_dir in self.rank_dirs:
             rank_dir.mkdir(parents=True, exist_ok=True)
 
+        self._dataloader_iter = iter(dataloader_for_batch_id(0))
         self._lock = threading.RLock()
         self._state = _ServerState(
             window_start_batch_id=0,
@@ -165,6 +166,7 @@ class TBFBatchHTTPServer:
         if batch_id < 0:
             raise ValueError("batch_id must be >= 0")
         with self._lock:
+            self._dataloader_iter = iter(self.dataloader_for_batch_id(batch_id))
             self._state.window_start_batch_id = batch_id
             self._state.fetched_current_by_rank = [False for _ in range(self.local_rank_count)]
             self._state.current_batch_by_rank = [batch_id - 1 for _ in range(self.local_rank_count)]
@@ -212,10 +214,8 @@ class TBFBatchHTTPServer:
         return self.rank_dirs[local_rank] / f"batch_{batch_id}.tbf"
 
     def _to_records_result(self, batch_id: int) -> ToRecordsResult:
-        loader = self.dataloader_for_batch_id(batch_id)
-        iterator = iter(loader)
         try:
-            global_batch = next(iterator)
+            global_batch = next(self._dataloader_iter)
         except StopIteration as exc:
             raise ValueError(f"no data for batch_id={batch_id}") from exc
 
