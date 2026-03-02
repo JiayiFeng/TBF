@@ -182,14 +182,13 @@ class TBFBatchHTTPServer:
     def fetch_next(self, local_rank: int) -> str:
         self._validate_rank(local_rank)
         with self._lock:
-            self._prefetch_window_locked()
             batch_id = self._state.window_start_batch_id
             if self._state.fetched_current_by_rank[local_rank]:
                 raise _NotReadyError(f"local_rank={local_rank} already fetched batch_id={batch_id}; waiting other ranks")
 
             filename = self._rank_file(local_rank, batch_id)
             if not filename.exists():
-                self._ensure_rank_link_locked(local_rank, batch_id)
+                self._prefetch_window_locked()
 
             self._state.current_batch_by_rank[local_rank] = batch_id
             self._state.fetched_current_by_rank[local_rank] = True
@@ -197,7 +196,6 @@ class TBFBatchHTTPServer:
             if all(self._state.fetched_current_by_rank):
                 self._state.window_start_batch_id += 1
                 self._state.fetched_current_by_rank = [False for _ in range(self.local_rank_count)]
-                self._prefetch_window_locked()
 
             return str(filename)
 
@@ -281,6 +279,11 @@ class TBFBatchHTTPServer:
         for batch_id in range(start, end):
             if batch_id == start:
                 skipped = {rank for rank, fetched in enumerate(self._state.fetched_current_by_rank) if fetched}
+                needed = [r for r in range(self.local_rank_count) if r not in skipped]
+                if all(self._rank_file(r, batch_id).exists() for r in needed):
+                    continue
                 self._materialize_batch_locked(batch_id, skip_ranks=skipped)
+                continue
+            if all(self._rank_file(r, batch_id).exists() for r in range(self.local_rank_count)):
                 continue
             self._materialize_batch_locked(batch_id)
