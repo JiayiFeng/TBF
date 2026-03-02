@@ -83,9 +83,7 @@ class AsyncTBFBatchClient:
             open_ms = (time.perf_counter() - t0) * 1000
             os.unlink(filename)
             t1 = time.perf_counter()
-            out = []
-            for i in range(len(reader)):
-                out.append(reader[i])
+            out = reader.read_all()
             read_ms = (time.perf_counter() - t1) * 1000
         total_ms = (time.perf_counter() - t0) * 1000
         print(f"  [TBF timing] _load_records rank={self.local_rank} file={filename}: "

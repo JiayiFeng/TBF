@@ -87,6 +87,35 @@ class TBFReader:
             out[entry.key] = tensor
         return out
 
+    def read_all(self) -> list[dict[str, torch.Tensor]]:
+        """Read all records in a single bulk copy.
+
+        Instead of cloning each tensor individually, the entire file is copied
+        into a bytearray once.  Tensors are then created as views into that
+        buffer (no extra per-tensor allocation/copy).  The bytearray is kept
+        alive via Python's reference counting as long as any returned tensor
+        is still referenced.
+        """
+        self._mmap.seek(0)
+        raw = bytearray(self._mmap.read())
+        result: list[dict[str, torch.Tensor]] = []
+        for record_entries in self._entries_by_record:
+            record: dict[str, torch.Tensor] = {}
+            for entry in record_entries:
+                dtype = self._code_to_dtype.get(entry.dtype_code)
+                if dtype is None:
+                    raise ValueError(f"unknown dtype_code: {entry.dtype_code}")
+                if entry.nbytes == 0:
+                    tensor = torch.empty(entry.shape, dtype=dtype)
+                else:
+                    element_size = self._code_to_elsize[entry.dtype_code]
+                    count = entry.nbytes // element_size
+                    # frombuffer holds a reference to raw; no clone needed.
+                    tensor = torch.frombuffer(raw, dtype=dtype, count=count, offset=entry.data_offset).view(entry.shape)
+                record[entry.key] = tensor
+            result.append(record)
+        return result
+
     def metadata(self) -> list[TensorMeta]:
         return list(self._entries)
 
