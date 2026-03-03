@@ -7,7 +7,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from typing import Any
 
 from .reader import TBFReader
@@ -20,12 +19,10 @@ class AsyncTBFBatchClient:
         local_rank: int,
         queue_size: int = 2,
         poll_interval_sec: float = 0.01,
-        record_selector: Callable[[int], list[int]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.local_rank = local_rank
         self.poll_interval_sec = poll_interval_sec
-        self._record_selector = record_selector
 
         self._queue: queue.Queue[list[dict[str, Any]]] = queue.Queue(maxsize=queue_size)
         self._stop_event = threading.Event()
@@ -80,14 +77,20 @@ class AsyncTBFBatchClient:
             except RuntimeError:
                 time.sleep(self.poll_interval_sec)
 
+    def _select_indices(self, record_count: int) -> range | list[int]:
+        """Return the record indices to load from a TBF file.
+
+        Override in a subclass to load only a subset of records.
+        """
+        return range(record_count)
+
     def _load_records(self, filename: str):
         t0 = time.perf_counter()
         with TBFReader(filename) as reader:
             open_ms = (time.perf_counter() - t0) * 1000
             os.unlink(filename)
             t1 = time.perf_counter()
-            indices = self._record_selector(len(reader)) if self._record_selector is not None else range(len(reader))
-            out = [reader[i] for i in indices]
+            out = [reader[i] for i in self._select_indices(len(reader))]
             read_ms = (time.perf_counter() - t1) * 1000
         total_ms = (time.perf_counter() - t0) * 1000
         print(f"  [TBF timing] _load_records rank={self.local_rank} file={filename}: "
