@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 from dataclasses import dataclass
 from pathlib import Path
 import torch
@@ -84,8 +83,9 @@ class TBFWriter:
         if pad_len:
             self._f.write(b"\x00" * pad_len)
 
-        payload = ctypes.string_at(t.data_ptr(), nbytes) if nbytes > 0 else b""
-        self._f.write(payload)
+        if nbytes > 0:
+            self._f.write(memoryview(t.numpy()))
+        
 
         self._entries.append(
             _IndexEntry(
